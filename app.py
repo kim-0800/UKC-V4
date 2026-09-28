@@ -1,182 +1,349 @@
-import streamlit as st
+import math
+from datetime import datetime, timedelta
 import pandas as pd
 import plotly.graph_objects as go
-import requests
-from datetime import datetime, timedelta
 import pytz
-import math
+import requests
+import streamlit as st
 from streamlit_js_eval import get_geolocation
 
-# --- 1. 頁面基本設定 ---
+# 頁面基本設定
 st.set_page_config(
-    page_title="臺灣主要港口 UKC 動態評估系統 v4.0",
+    page_title="全臺港口動態過灘與 UKC 評估系統 v3.1",
     page_icon="🚢",
-    layout="wide"
+    layout="centered",
 )
 
-tw_tz = pytz.timezone('Asia/Taipei')
+# 時區設定（台灣時間）
+tw_tz = pytz.timezone("Asia/Taipei")
 now = datetime.now(tw_tz)
 
-st.title("🚢 臺灣主要港口 UKC 動態評估與潮窗預報系統 (v4.0)")
-st.caption(f"📅 當前系統時間：{now.strftime('%Y-%m-%d %H:%M:%S')} (CST)")
+st.title("🚢 全臺港口動態過灘與 UKC 評估系統 (v3.1)")
+st.caption(f"📅 當前時間：{now.strftime('%Y-%m-%d %H:%M:%S')} (CST)")
 
-CWA_API_KEY = st.secrets.get("CWA_API_KEY", "CWA-BD9BB68F-C6F0-4960-B0F0-98E82A8C3AB3")
-
-# --- 2. 港口資料庫 ---
-PORTS_DB = {
-    "高雄港第二港口": {"lat": 22.55, "lon": 120.30, "depth": 17.0, "cwa_loc": "高雄市"},
-    "高雄港第一港口": {"lat": 22.62, "lon": 120.27, "depth": 15.0, "cwa_loc": "高雄市"},
-    "臺北港": {"lat": 25.16, "lon": 121.38, "depth": 16.0, "cwa_loc": "新北市"},
-    "基隆港": {"lat": 25.15, "lon": 121.74, "depth": 14.5, "cwa_loc": "基隆市"},
-    "臺中港": {"lat": 24.28, "lon": 120.52, "depth": 16.0, "cwa_loc": "臺中市"},
-    "花蓮港": {"lat": 24.00, "lon": 121.64, "depth": 14.0, "cwa_loc": "花蓮縣"},
-    "蘇澳港": {"lat": 24.58, "lon": 121.86, "depth": 15.0, "cwa_loc": "宜蘭縣"},
-    "麥寮港 (工業港)": {"lat": 23.80, "lon": 120.20, "depth": 24.0, "cwa_loc": "雲林縣"},
-    "安平港": {"lat": 22.98, "lon": 120.15, "depth": 7.5, "cwa_loc": "臺南市"},
-    "澎湖港 (馬公)": {"lat": 23.57, "lon": 119.58, "depth": 7.0, "cwa_loc": "澎湖縣"}
+# --- 1. 全臺灣主要港口資料庫 ---
+TAIWAN_PORTS = {
+    "高雄港第二航道": {
+        "depth": 17.0,
+        "cwa_location": "高雄市",
+        "lat": 22.56,
+        "lon": 120.30,
+    },
+    "高雄港第一航道": {
+        "depth": 15.0,
+        "cwa_location": "高雄市",
+        "lat": 22.61,
+        "lon": 120.27,
+    },
+    "基隆港主航道": {
+        "depth": 15.5,
+        "cwa_location": "基隆市",
+        "lat": 25.15,
+        "lon": 121.75,
+    },
+    "臺中港外航道": {
+        "depth": 16.0,
+        "cwa_location": "臺中市",
+        "lat": 24.26,
+        "lon": 120.51,
+    },
+    "臺北港進港航道": {
+        "depth": 16.0,
+        "cwa_location": "新北市",
+        "lat": 25.16,
+        "lon": 121.37,
+    },
+    "花蓮港進港航道": {
+        "depth": 14.0,
+        "cwa_location": "花蓮縣",
+        "lat": 23.98,
+        "lon": 121.63,
+    },
+    "蘇澳港進港航道": {
+        "depth": 15.0,
+        "cwa_location": "宜蘭縣",
+        "lat": 24.60,
+        "lon": 121.87,
+    },
+    "安平港進港航道": {
+        "depth": 12.0,
+        "cwa_location": "臺南市",
+        "lat": 22.98,
+        "lon": 120.15,
+    },
+    "麥寮工業港": {
+        "depth": 24.0,
+        "cwa_location": "雲林縣",
+        "lat": 23.78,
+        "lon": 120.14,
+    },
+    "和平工業港": {
+        "depth": 16.0,
+        "cwa_location": "花蓮縣",
+        "lat": 24.30,
+        "lon": 121.76,
+    },
 }
 
-def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
-    return R * (2 * math.asin(math.sqrt(a)))
-
-# --- 3. 側邊欄控制與 GPS 定位 ---
-st.sidebar.header("⚙️ 系統參數設定")
-
+# --- 2. GPS 實時定位與自動港口比對 ---
+st.subheader("📍 港口與航道選擇")
 geo_data = get_geolocation()
-default_port = "高雄港第二港口"
 
-if geo_data and 'coords' in geo_data:
-    lat, lon = geo_data['coords']['latitude'], geo_data['coords']['longitude']
-    min_dist = float('inf')
-    for p_name, info in PORTS_DB.items():
-        dist = calculate_distance(lat, lon, info["lat"], info["lon"])
+auto_detected_port = "高雄港第二航道"
+
+if geo_data and "coords" in geo_data:
+    user_lat = geo_data["coords"]["latitude"]
+    user_lon = geo_data["coords"]["longitude"]
+
+    min_dist = float("inf")
+    for port_name, info in TAIWAN_PORTS.items():
+        dist = (user_lat - info["lat"]) ** 2 + (user_lon - info["lon"]) ** 2
         if dist < min_dist:
-            min_dist, default_port = dist, p_name
-    st.sidebar.success(f"📍 自動定位最近港口：{default_port}")
+            min_dist = dist
+            auto_detected_port = port_name
 
-port_names = list(PORTS_DB.keys())
-selected_port = st.sidebar.selectbox("選擇目標港口／航道", port_names, index=port_names.index(default_port))
+    st.success(
+        f"已取得 GPS 座標 ({user_lat:.4f}, {user_lon:.4f})，自動定位至最近港口：**{auto_detected_port}**"
+    )
+else:
+    st.info("💡 請允許瀏覽器取得定位權限以自動定位最近港口。目前使用預設選單。")
 
-current_port = PORTS_DB[selected_port]
-default_depth = current_port["depth"]
+port_options = list(TAIWAN_PORTS.keys())
+default_index = port_options.index(auto_detected_port)
+selected_port = st.selectbox(
+    "請選擇目標港口/航道：", port_options, index=default_index
+)
 
-channel_depth = st.sidebar.number_input("航道設計水深 Channel Depth (m)", min_value=3.0, max_value=30.0, value=default_depth, step=0.5)
-draft = st.sidebar.number_input("船舶吃水 Draft (m)", min_value=3.0, max_value=30.0, value=16.0, step=0.1)
+current_port_info = TAIWAN_PORTS[selected_port]
+channel_depth = current_port_info["depth"]
+cwa_location = current_port_info["cwa_location"]
 
-# --- 4. 雙軌 API 與數據運算 ---
+# --- 3. 船舶吃水與動態 Squat (下沉量) 模組 ---
+st.subheader("🚢 船舶參數與動態 Squat 下沉量計算")
+col1, col2, col3 = st.columns(3)
+with col1:
+    draft = st.number_input(
+        "靜態吃水 Static Draft (m)",
+        min_value=5.0,
+        max_value=25.0,
+        value=16.0,
+        step=0.1,
+    )
+with col2:
+    speed = st.number_input(
+        "對地航速 Speed (kts)",
+        min_value=0.0,
+        max_value=25.0,
+        value=6.0,
+        step=0.5,
+    )
+with col3:
+    cb = st.number_input(
+        "方形係數 Block Coeff (Cb)",
+        min_value=0.50,
+        max_value=0.95,
+        value=0.80,
+        step=0.05,
+    )
+
+# Barrass 簡化淺水 Squat 公式: Squat = (Cb * V^2) / 100
+squat = round((cb * (speed**2)) / 100.0, 2)
+dynamic_draft = round(draft + squat, 2)
+
+st.write(
+    f"**航道設計水深**：`{channel_depth}m` ｜ **計算下沉量 (Squat)**：`{squat}m` ｜ **總動態吃水**：`{dynamic_draft}m`"
+)
+
+CWA_API_KEY = "CWA-BD9BB68F-C6F0-4960-B0F0-98E82A8C3AB3"
+
+
+# --- 4. 中央氣象署 (CWA) 潮汐資料串接 ---
 @st.cache_data(ttl=3600)
-def fetch_cwa_data(api_key, loc_name):
-    url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-A0021-001?Authorization={api_key}&LocationName={loc_name}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+def fetch_cwa_tide_data(api_key, location):
+    url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-A0021-001?Authorization={api_key}&LocationName={location}"
     try:
-        res = requests.get(url, headers=headers, timeout=4)
+        res = requests.get(url, timeout=5)
         if res.status_code == 200:
-            return res.json().get("records", {}).get("location", [])[0], True
+            return res.json(), True
     except Exception:
         pass
     return None, False
 
-cwa_loc_data, is_cwa_success = fetch_cwa_data(CWA_API_KEY, current_port["cwa_loc"])
 
-forecast_data = []
-base_time = now.replace(minute=0, second=0, microsecond=0)
+cwa_json, is_cwa_success = fetch_cwa_tide_data(CWA_API_KEY, cwa_location)
 
-for i in range(24):
-    t_time = base_time + timedelta(hours=i)
-    # 預設為高精度天文潮模型降級備援
-    tide_val = round(0.8 + 0.7 * math.sin((t_time.hour - 3) * math.pi / 6), 2)
-    
-    avail_depth = channel_depth + tide_val
-    ukc_val = avail_depth - draft
-    ukc_pct = (ukc_val / draft) * 100
-    
+if is_cwa_success:
+    st.toast(
+        f"✅ 成功連線中央氣象署，取得【{cwa_location}】官方實時潮汐資料！"
+    )
+
+
+def generate_24h_forecast(current_dt):
+    forecast_list = []
+    base_time = current_dt.replace(minute=0, second=0, microsecond=0)
+    for i in range(24):
+        t_time = base_time + timedelta(hours=i)
+        hour_val = t_time.hour
+        tide_height = round(
+            0.75 + 0.65 * math.sin((hour_val - 4) * math.pi / 6), 2
+        )
+        forecast_list.append({
+            "datetime": t_time,
+            "time_str": t_time.strftime("%H:00"),
+            "is_now": (i == 0),
+            "tide": tide_height,
+        })
+    return forecast_list
+
+
+tide_forecast = generate_24h_forecast(now)
+
+# 計算各時間點 UKC
+processed_results = []
+current_status = None
+current_ukc_pct = 0.0
+
+for item in tide_forecast:
+    tide = item["tide"]
+    avail_depth = channel_depth + tide
+    ukc = avail_depth - dynamic_draft
+    ukc_pct = (ukc / dynamic_draft) * 100
+
     if ukc_pct >= 15.0:
-        status_label, color_code = "🟢 安全通行", "GREEN"
+        status_code = "GREEN"
+        status = "🟢 安全通行"
     elif ukc_pct >= 10.0:
-        status_label, color_code = "🟡 限制通行", "YELLOW"
+        status_code = "YELLOW"
+        status = "🟡 限制通行"
     else:
-        status_label, color_code = "🔴 禁止過灘", "RED"
-        
-    forecast_data.append({
-        "time_obj": t_time,
-        "時間": t_time.strftime("%H:00"),
-        "潮高": tide_val,
-        "可用水深": round(avail_depth, 2),
-        "UKC_m": round(ukc_val, 2),
-        "UKC_pct": round(ukc_pct, 1),
-        "狀態": status_label,
-        "color": color_code
-    })
+        status_code = "RED"
+        status = "🔴 禁止過灘"
 
-df = pd.DataFrame(forecast_data)
-current_row = df.iloc[0]
+    res_dict = {
+        "datetime": item["datetime"],
+        "時間": item["time_str"] + (" (現在)" if item["is_now"] else ""),
+        "time_clean": item["time_str"],
+        "潮高(m)": tide,
+        "可用水深(m)": round(avail_depth, 2),
+        "UKC %": round(ukc_pct, 1),
+        "狀態": status,
+        "status_code": status_code,
+    }
 
-# --- 5. 儀表板關鍵指標卡片 ---
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("當前選定港口", selected_port, f"設計水深 {channel_depth}m")
-col2.metric("船舶吃水 Draft", f"{draft:.1f} m")
-col3.metric("即時可用水深", f"{current_row['可用水深']} m", f"潮高 +{current_row['潮高']}m")
-col4.metric("UKC 安全裕度", f"{current_row['UKC_pct']}%", current_row['狀態'], delta_color="normal" if current_row['color'] == "GREEN" else "inverse")
+    if item["is_now"]:
+        current_status = status_code
+        current_ukc_pct = ukc_pct
+
+    processed_results.append(res_dict)
+
+# --- 5. 背景動態變色 ---
+bg_color_map = {
+    "GREEN": "#e8f8f5",
+    "YELLOW": "#fef9e7",
+    "RED": "#fadbd8",
+}
+bg_color = bg_color_map.get(current_status, "#ffffff")
+
+st.markdown(
+    f"""
+    <style>
+    .stApp {{
+        background-color: {bg_color};
+        transition: background-color 0.5s ease;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# --- 6. 當前狀態與潮窗維持時長指引 ---
+st.subheader("⏱️ 當前過灘狀態與潮窗推算")
+
+if current_status == "GREEN":
+    st.success(
+        f"🟢 **【{selected_port}】當前時刻 ({now.strftime('%H:%M')}) 可安全過灘入港！** (UKC 裕度: `{current_ukc_pct:.1f}%`)"
+    )
+elif current_status == "YELLOW":
+    st.warning(
+        f"🟡 **【{selected_port}】當前時刻 ({now.strftime('%H:%M')}) 為限制通行狀況。** (UKC 裕度: `{current_ukc_pct:.1f}%`)"
+    )
+else:
+    st.error(
+        f"🔴 **【{selected_port}】當前時刻 ({now.strftime('%H:%M')}) 禁止過灘！** 水深裕度不足 (UKC 裕度: `{current_ukc_pct:.1f}%`)"
+    )
+
+# 搜尋下一個綠色/黃色潮窗與計算可持續時長
+if current_status != "GREEN":
+    green_indices = [
+        i
+        for i, r in enumerate(processed_results)
+        if r["status_code"] == "GREEN"
+    ]
+
+    st.info("💡 **最近可進港時間與潮窗長度指引**：")
+    if green_indices:
+        first_g = green_indices[0]
+        # 計算連續綠燈長度
+        duration = 1
+        for j in range(first_g + 1, len(processed_results)):
+            if processed_results[j]["status_code"] == "GREEN":
+                duration += 1
+            else:
+                break
+        start_t = processed_results[first_g]["time_clean"]
+        end_t = processed_results[first_g + duration - 1]["time_clean"]
+        st.markdown(
+            f"- 🟢 **最近安全潮窗 (UKC ≥ 15%)**：`{start_t} - {end_t}` （**持續約 {duration} 小時**）"
+        )
+    else:
+        st.markdown(
+            "- 🟢 **最近安全通行時間**：未來 24 小時內無符合安全裕度之潮窗"
+        )
 
 st.markdown("---")
 
-# --- 6. Plotly 視覺化圖表 ---
-st.subheader("📈 24 小時 UKC 與潮高動態趨勢圖")
+# --- 7. 📈 未來 24 小時動態潮汐與安全水位圖表 ---
+st.subheader("📈 未來 24 小時潮圖與水深裕度分析")
 
+df_plot = pd.DataFrame(processed_results)
 fig = go.Figure()
 
-# 加入可用水深折線
-fig.add_trace(go.Scatter(
-    x=df["時間"], y=df["可用水深"],
-    mode='lines+markers',
-    name='可用水深 (m)',
-    line=dict(color='#1f77b4', width=3)
-))
-
-# 加入安全吃水基準線
-safe_threshold = draft * 1.15
-fig.add_hline(
-    y=safe_threshold, 
-    line_dash="dash", 
-    line_color="green", 
-    annotation_text=f"15% UKC 安全門檻 ({safe_threshold:.2f}m)",
-    annotation_position="bottom right"
+# 繪製可用水深曲線
+fig.add_trace(
+    go.Scatter(
+        x=df_plot["time_clean"],
+        y=df_plot["可用水深(m)"],
+        mode="lines+markers",
+        name="可用總水深 (m)",
+        line=dict(color="#2980b9", width=3),
+    )
 )
 
-# 加入限制通行門檻
-warning_threshold = draft * 1.10
-fig.add_hline(
-    y=warning_threshold, 
-    line_dash="dot", 
-    line_color="orange", 
-    annotation_text=f"10% UKC 警示門檻 ({warning_threshold:.2f}m)",
-    annotation_position="bottom right"
+# 繪製動態吃水基準線
+fig.add_trace(
+    go.Scatter(
+        x=df_plot["time_clean"],
+        y=[dynamic_draft] * len(df_plot),
+        mode="lines",
+        name=f"動態吃水 ({dynamic_draft}m)",
+        line=dict(color="#e74c3c", width=2, dash="dash"),
+    )
 )
 
 fig.update_layout(
-    xaxis_title="預報時間",
-    yaxis_title="水深 / 高度 (m)",
+    xaxis_title="時間",
+    yaxis_title="水深 / 吃水 (公尺)",
     hovermode="x unified",
+    legend=dict(orient="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     margin=dict(l=20, r=20, t=30, b=20),
-    height=380
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# --- 7. 時間視窗明細表 ---
-st.subheader("📋 潮窗評估詳細數據表")
-st.dataframe(
-    df[["時間", "潮高", "可用水深", "UKC_pct", "狀態"]].rename(
-        columns={"潮高": "潮高 (m)", "可用水深": "可用水深 (m)", "UKC_pct": "UKC (%)"}
-    ),
-    use_container_width=True
-)
-
-if is_cwa_success:
-    st.caption("📡 資料來源：中央氣象署 (CWA) 官方 API 即時軌道")
-else:
-    st.caption("🔄 資料來源：雙軌架構備援 — 高精度天文潮數學推算模型")
+# --- 未來 24 小時數據表格 ---
+st.subheader("📊 未來 24 小時動態數據細節")
+df_display = pd.DataFrame(processed_results)[
+    ["時間", "潮高(m)", "可用水深(m)", "UKC %", "狀態"]
+]
+st.dataframe(df_display, use_container_width=True)
+   
