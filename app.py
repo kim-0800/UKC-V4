@@ -8,7 +8,7 @@ from streamlit_js_eval import get_geolocation
 
 # 頁面基本設定
 st.set_page_config(
-    page_title="全臺港口動態過灘與 UKC 評估系統 v3.1",
+    page_title="全臺港口動態過灘與 UKC 評估系統 v4.1",
     page_icon="🚢",
     layout="centered",
 )
