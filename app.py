@@ -17,7 +17,7 @@ st.set_page_config(
 tw_tz = pytz.timezone("Asia/Taipei")
 now = datetime.now(tw_tz)
 
-st.title("🚢 全臺港口動態過灘與 UKC 評估系統 (v3.1)")
+st.title("🚢 全臺港口動態過灘與 UKC 評估系統 (v4.1)")
 st.caption(f"📅 當前時間：{now.strftime('%Y-%m-%d %H:%M:%S')} (CST)")
 
 # --- 1. 全臺灣主要港口資料庫 ---
