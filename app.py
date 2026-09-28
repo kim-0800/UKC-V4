@@ -1,7 +1,6 @@
 import math
 from datetime import datetime, timedelta
 import pandas as pd
-import plotly.graph_objects as go
 import pytz
 import requests
 import streamlit as st
@@ -146,7 +145,7 @@ with col3:
         step=0.05,
     )
 
-# Barrass 簡化淺水 Squat 公式: Squat = (Cb * V^2) / 100
+# Barrass 簡化淺水 Squat 公式
 squat = round((cb * (speed**2)) / 100.0, 2)
 dynamic_draft = round(draft + squat, 2)
 
@@ -283,7 +282,6 @@ if current_status != "GREEN":
     st.info("💡 **最近可進港時間與潮窗長度指引**：")
     if green_indices:
         first_g = green_indices[0]
-        # 計算連續綠燈長度
         duration = 1
         for j in range(first_g + 1, len(processed_results)):
             if processed_results[j]["status_code"] == "GREEN":
@@ -302,43 +300,20 @@ if current_status != "GREEN":
 
 st.markdown("---")
 
-# --- 7. 📈 未來 24 小時動態潮汐與安全水位圖表 ---
+# --- 7. 📈 原生穩定版：未來 24 小時潮圖與水深裕度分析 ---
 st.subheader("📈 未來 24 小時潮圖與水深裕度分析")
 
-df_plot = pd.DataFrame(processed_results)
-fig = go.Figure()
+df_chart = pd.DataFrame(processed_results)
 
-# 繪製可用水深曲線
-fig.add_trace(
-    go.Scatter(
-        x=df_plot["time_clean"],
-        y=df_plot["可用水深(m)"],
-        mode="lines+markers",
-        name="可用總水深 (m)",
-        line=dict(color="#2980b9", width=3),
-    )
-)
+# 整理繪圖資料格式
+chart_data = pd.DataFrame({
+    "時間": df_chart["time_clean"],
+    "可用總水深 (m)": df_chart["可用水深(m)"],
+    "動態吃水 (m)": [dynamic_draft] * len(df_chart),
+}).set_index("時間")
 
-# 繪製動態吃水基準線
-fig.add_trace(
-    go.Scatter(
-        x=df_plot["time_clean"],
-        y=[dynamic_draft] * len(df_plot),
-        mode="lines",
-        name=f"動態吃水 ({dynamic_draft}m)",
-        line=dict(color="#e74c3c", width=2, dash="dash"),
-    )
-)
-
-fig.update_layout(
-    xaxis_title="時間",
-    yaxis_title="水深 / 吃水 (公尺)",
-    hovermode="x unified",
-    legend=dict(orient="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=20, r=20, t=30, b=20),
-)
-
-st.plotly_chart(fig, use_container_width=True)
+# 使用 Streamlit 官方原生圖表元件，超穩定且不會報錯！
+st.line_chart(chart_data)
 
 # --- 未來 24 小時數據表格 ---
 st.subheader("📊 未來 24 小時動態數據細節")
@@ -346,4 +321,3 @@ df_display = pd.DataFrame(processed_results)[
     ["時間", "潮高(m)", "可用水深(m)", "UKC %", "狀態"]
 ]
 st.dataframe(df_display, use_container_width=True)
-   
