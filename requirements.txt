@@ -1,6 +1,6 @@
 streamlit
 pandas
 requests
-plotly
-streamlit-js-eval
 pytz
+streamlit-js-eval
+plotly
